@@ -1135,6 +1135,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2094130325}
+  - component: {fileID: 2094130326}
   m_Layer: 0
   m_Name: SPH System
   m_TagString: Untagged
@@ -1158,6 +1159,37 @@ Transform:
   m_Father: {fileID: 0}
   m_RootOrder: 3
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2094130326
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2094130324}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8783742e740356d429bd7c1a6abf5f6c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  maxParticleNum: 0
+  timeStep: 0.01
+  kernelRadius: 1
+  kr2: 0
+  kr3Inv: 0
+  kr6Inv: 0
+  kr9Inv: 0
+  stiffness: 0.1
+  restDensity: 1
+  externalAcc: {x: 0, y: 0, z: 0}
+  viscosity: 1
+  tensionCoeff: 1
+  surfaceThreshold: 0.001
+  gridBound:
+    m_Center: {x: 0, y: 0, z: 0}
+    m_Extent: {x: 10, y: 10, z: 10}
+  gridSize: {x: 32, y: 32, z: 32}
+  _sphthreadGroupNum: 0
+  _obstacles: []
 --- !u!1 &2110728083
 GameObject:
   m_ObjectHideFlags: 0
