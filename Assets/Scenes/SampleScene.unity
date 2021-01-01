@@ -1186,7 +1186,7 @@ MonoBehaviour:
   surfaceThreshold: 0.001
   gridBound:
     m_Center: {x: 0, y: 0, z: 0}
-    m_Extent: {x: 10, y: 10, z: 10}
+    m_Extent: {x: 5, y: 5, z: 5}
   gridSize: {x: 32, y: 32, z: 32}
   _sphthreadGroupNum: 0
   _obstacles: []

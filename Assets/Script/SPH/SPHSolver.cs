@@ -23,7 +23,6 @@ public class SPHSolver: MonoBehaviour
     public float kr2, kr3Inv, kr6Inv, kr9Inv;
     #endregion
 
-
     public float stiffness = 0.1f;
     public float restDensity = 1.0f;
     public Vector3 externalAcc = Vector3.zero;
@@ -54,9 +53,11 @@ public class SPHSolver: MonoBehaviour
     public ComputeBuffer _bufParticles;
     private ComputeBuffer _bufNeighborSpace;
     public ComputeBuffer _bufParticleNumPerCell;
+    public ComputeBuffer _bufGridStartIdx;
 
     private int[] _neighborSpace;
     private int[] _particleNumPerCell;
+    private int[] _gridStartIdx;
     private int _scanThreadGroupNum;
 
     public List<SPH_Rigidbody> _obstacles;
@@ -79,19 +80,20 @@ public class SPHSolver: MonoBehaviour
 
         sphShader.SetFloat("timeStep", timeStep);
         sphShader.SetFloat("kernelRadius", kernelRadius);
+        sphShader.SetInts("gridSize", gridSize.x, gridSize.y, gridSize.z);
         sphShader.SetFloat("kr1Inv", 1.0f / kernelRadius);
         sphShader.SetFloat("kr3Inv", kr3Inv);
         sphShader.SetFloat("kr6Inv", kr6Inv);
         sphShader.SetFloat("kr9Inv", kr9Inv);
         sphShader.SetFloat("stiffness", stiffness);
         sphShader.SetFloat("restDensity", restDensity);
-        sphShader.SetVector("externalAcc", externalAcc);
+        sphShader.SetFloats("externalAcc", externalAcc.x, externalAcc.y, externalAcc.z);
         sphShader.SetFloat("viscosity", viscosity);
         sphShader.SetFloat("tensionCoeff", tensionCoeff);
         sphShader.SetFloat("surfaceThreshold", surfaceThreshold);
         sphShader.SetFloat("eps", Mathf.Epsilon);
-        sphShader.SetVector("lowerBound", gridBound.min);
-        sphShader.SetVector("upperBound", gridBound.max);
+        sphShader.SetFloats("lowerBound", gridBound.min.x, gridBound.min.y, gridBound.min.z);
+        sphShader.SetFloats("upperBound", gridBound.max.x, gridBound.max.y, gridBound.max.z);
 
         particleComparer = new ParticleComparer();
 
@@ -113,25 +115,43 @@ public class SPHSolver: MonoBehaviour
         _particleNumPerCell = new int[gridSize.x * gridSize.y * gridSize.z];
         _bufParticleNumPerCell.SetData(_particleNumPerCell);
 
+        _bufGridStartIdx = new ComputeBuffer(gridSize.x * gridSize.y * gridSize.z, sizeof(int));
+        _gridStartIdx = new int[gridSize.x * gridSize.y * gridSize.z];
+
         sphShader.SetBuffer(kernelCellIdx, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelCellIdx, "particleNumPerCell", _bufParticleNumPerCell);
         sphShader.Dispatch(kernelCellIdx, _sphthreadGroupNum, 1, 1);
         _bufParticles.GetData(arrayParticles);
         System.Array.Sort(arrayParticles, particleComparer);
 
+        _bufParticleNumPerCell.GetData(_particleNumPerCell);
+        _gridStartIdx[0] = _particleNumPerCell[0];
+        for (int i = 1; i < _gridStartIdx.Length; ++i)
+            _gridStartIdx[i] = _gridStartIdx[i - 1] + _particleNumPerCell[i];
+        _bufGridStartIdx.SetData(_gridStartIdx);
+
         sphShader.SetBuffer(kernelFindNearby, "particles", _bufParticles);
         sphShader.SetBuffer(kernelFindNearby, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelFindNearby, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelFindNearby, "gridStartIdx", _bufGridStartIdx);
         sphShader.Dispatch(kernelFindNearby, _sphthreadGroupNum, 1, 1);
 
-        sphShader.SetBuffer(kernelFindNearby, "particles", _bufParticles);
-        sphShader.SetBuffer(kernelFindNearby, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateDensity, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelUpdateDensity, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateDensity, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelUpdateDensity, "gridStartIdx", _bufGridStartIdx);
         sphShader.Dispatch(kernelUpdateDensity, _sphthreadGroupNum, 1, 1);
 
-        sphShader.SetBuffer(kernelFindNearby, "particles", _bufParticles);
-        sphShader.SetBuffer(kernelFindNearby, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "gridStartIdx", _bufGridStartIdx);
         sphShader.Dispatch(kernelUpdateVisosityForce, _sphthreadGroupNum, 1, 1);
 
-        sphShader.SetBuffer(kernelFindNearby, "particles", _bufParticles);
-        sphShader.SetBuffer(kernelFindNearby, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelInitParticle, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelInitParticle, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelInitParticle, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelInitParticle, "gridStartIdx", _bufGridStartIdx);
         sphShader.Dispatch(kernelInitParticle, _sphthreadGroupNum, 1, 1);
     }
 
@@ -154,6 +174,64 @@ public class SPHSolver: MonoBehaviour
     }
     private void FixedUpdate()
     {
-        
+
+        sphShader.SetBuffer(kernelFindNearby, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelFindNearby, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelFindNearby, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelFindNearby, "gridStartIdx", _bufGridStartIdx);
+        sphShader.Dispatch(kernelFindNearby, _sphthreadGroupNum, 1, 1);
+
+        sphShader.SetBuffer(kernelUpdateDensity, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelUpdateDensity, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateDensity, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelUpdateDensity, "gridStartIdx", _bufGridStartIdx);
+        sphShader.Dispatch(kernelUpdateDensity, _sphthreadGroupNum, 1, 1);
+
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelUpdateVisosityForce, "gridStartIdx", _bufGridStartIdx);
+        sphShader.Dispatch(kernelUpdateVisosityForce, _sphthreadGroupNum, 1, 1);
+
+        sphShader.SetBuffer(kernelAdvanceParticle, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelAdvanceParticle, "neighborSpace", _bufNeighborSpace);
+        sphShader.SetBuffer(kernelAdvanceParticle, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.SetBuffer(kernelAdvanceParticle, "gridStartIdx", _bufGridStartIdx);
+        sphShader.Dispatch(kernelAdvanceParticle, _sphthreadGroupNum, 1, 1);
+
+        sphShader.SetBuffer(kernelCellIdx, "particles", _bufParticles);
+        sphShader.SetBuffer(kernelCellIdx, "particleNumPerCell", _bufParticleNumPerCell);
+        sphShader.Dispatch(kernelCellIdx, _sphthreadGroupNum, 1, 1);
+        _bufParticles.GetData(arrayParticles);
+        System.Array.Sort(arrayParticles, particleComparer);
+        _bufParticleNumPerCell.GetData(_particleNumPerCell);
+        _gridStartIdx[0] = _particleNumPerCell[0];
+        for (int i = 1; i < _gridStartIdx.Length; ++i)
+            _gridStartIdx[i] = _gridStartIdx[i - 1] + _particleNumPerCell[i];
+        _bufGridStartIdx.SetData(_gridStartIdx);
+    }
+
+    private void Free()
+    {
+        if(_bufNeighborSpace != null)
+        {
+            _bufNeighborSpace.Release();
+            _bufNeighborSpace = null;
+        }
+        if (_bufParticles != null)
+        {
+            _bufParticles.Release();
+            _bufParticles = null;
+        }
+        if (_bufParticleNumPerCell != null)
+        {
+            _bufParticleNumPerCell.Release();
+            _bufParticleNumPerCell = null;
+        }
+        if (_bufGridStartIdx != null)
+        {
+            _bufGridStartIdx.Release();
+            _bufGridStartIdx = null;
+        }
     }
 }

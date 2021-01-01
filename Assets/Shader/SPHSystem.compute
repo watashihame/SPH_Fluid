@@ -1,7 +1,258 @@
-﻿// Each #kernel tells which function to compile; you can have many kernels
-#pragma kernel UpdateDensity
+﻿#include "SPHUtils.compute"
 
-[numthreads(8,8,1)]
-void UpdateDensity(uint3 id : SV_DispatchThreadID)
+#pragma kernel ComputeCellIdx
+#pragma kernel FindNearby
+#pragma kernel UpdateDensity
+#pragma kernel UpdateForce
+#pragma kernel AdvanceParticle
+#pragma kernel InitParticle
+
+uniform uint particleNum;
+RWStructuredBuffer<Particle> particles;
+RWStructuredBuffer<uint> neighborSpace;
+RWBuffer<uint> particleNumPerCell;
+RWBuffer<uint> gridStartIdx;
+
+
+[numthreads(8, 8, 8)]
+void ComputeCellIdx(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
 {
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	uint3 cellIdx = floor((particles[flatIdx].position - lowerBound) * kr1Inv);
+	particles[flatIdx].cellIdx1d = cellIdx.x * gridSize.y * gridSize.z +
+		cellIdx.y * gridSize.z +
+		cellIdx.z;
+	InterlockedAdd(particleNumPerCell[particles[flatIdx].cellIdx1d], 1);
+}
+
+[numthreads(8, 8, 8)]
+void FindNearby(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	uint3 cellIdx = floor((particles[flatIdx].position - lowerBound) * kr1Inv);
+
+	uint neighbor[27];
+	uint i = 0;
+
+	[unroll]
+	for (i = 0; i < 27; ++i)
+		neighbor[i] = 0;
+
+	//for(uint p = 0; p < 27; ++p)
+	//	neighbor[p] = false;
+
+	 //x + 3y + 9z
+	neighbor[13] = 1;
+
+	if (cellIdx.x > 0) // (0, 1, 1) -> 12
+		neighbor[12] = 1;
+	if (cellIdx.y > 0) // (1, 0, 1) ->10
+		neighbor[10] = 1;
+	if (cellIdx.z > 0) // (1, 1, 0) -> 4
+		neighbor[4] = 1;
+
+	if (cellIdx.x < gridSize.x - 1) // (2, 1, 1) -> 14
+		neighbor[14] = 1;
+	if (cellIdx.y < gridSize.y - 1) // (1, 2, 1) -> 16
+		neighbor[16] = 1;
+	if (cellIdx.z < gridSize.z - 1) // (1, 1, 2) -> 22
+		neighbor[22] = 1;
+
+	if (cellIdx.x > 0 && cellIdx.y > 0) // (0, 0, 1) -> 9
+		neighbor[9] = 1;
+
+	if (cellIdx.y > 0 && cellIdx.z > 0) // (1, 0, 0) -> 1
+		neighbor[1] = 1;
+
+	if (cellIdx.x > 0 && cellIdx.z > 0) // (0, 1, 0) -> 3
+		neighbor[3] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y < gridSize.y - 1) // (2, 2, 1) -> 17
+		neighbor[17] = 1;
+
+	if (cellIdx.y < gridSize.y - 1 && cellIdx.z < gridSize.z - 1) // (1, 2, 2) -> 25
+		neighbor[25] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.z < gridSize.z - 1) // (2, 1, 2) -> 23
+		neighbor[23] = 1;
+
+	if (cellIdx.x > 0 && cellIdx.y < gridSize.y - 1) // (0, 2, 1) -> 15
+		neighbor[15] = 1;
+
+	if (cellIdx.y > 0 && cellIdx.z < gridSize.z - 1) // (1, 0, 2) -> 19
+		neighbor[19] = 1;
+
+	if (cellIdx.x > 0 && cellIdx.z < gridSize.z - 1) // (0, 1, 2) -> 21
+		neighbor[21] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y > 0) // (2, 0, 1) -> 11
+		neighbor[11] = 1;
+	if (cellIdx.y < gridSize.y - 1 && cellIdx.z > 0) // (1, 2, 0) -> 7
+		neighbor[7] = 1;
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.z > 0) // (2, 1, 0) -> 5
+		neighbor[5] = 1;
+	if (cellIdx.x > 0 && cellIdx.y > 0 && cellIdx.z > 0) // (0, 0, 0) -> 0
+		neighbor[0] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y > 0 && cellIdx.z > 0) // (2, 0, 0) -> 2
+		neighbor[2] = 1;
+	if (cellIdx.x > 0 && cellIdx.y < gridSize.y - 1 && cellIdx.z > 0) // (0, 2, 0) -> 6
+		neighbor[6] = 1;
+	if (cellIdx.x > 0 && cellIdx.y > 0 && cellIdx.z < gridSize.z - 1) // (0, 0, 2) -> 18
+		neighbor[18] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y < gridSize.y - 1 && cellIdx.z > 0) // (2, 2, 0) -> 8
+		neighbor[8] = 1;
+	if (cellIdx.x > 0 && cellIdx.y < gridSize.y - 1 && cellIdx.z < gridSize.z - 1) // (0, 2, 2) -> 24
+		neighbor[24] = 1;
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y > 0 && cellIdx.z < gridSize.z - 1) // (2, 0, 2) -> 20
+		neighbor[20] = 1;
+
+	if (cellIdx.x < gridSize.x - 1 && cellIdx.y < gridSize.y - 1 && cellIdx.z < gridSize.z - 1) // (2, 2, 2) -> 26
+		neighbor[26] = 1;
+
+	[unroll]
+	for (i = 0; i < 27; ++i)
+		neighborSpace[flatIdx * 27 + i] = neighbor[i];
+}
+
+[numthreads(8, 8, 8)]
+void UpdateDensity(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	particles[flatIdx].inv_density = 0;
+
+	[unroll]
+	for (uint i = 0; i < 27; ++i)
+	{
+		if (!neighborSpace[flatIdx * 27 + i])
+			continue;
+
+		uint neighborIdx1d = particles[flatIdx].cellIdx1d +
+			neighborOffset[i].x * gridSize.y * gridSize.z +
+			neighborOffset[i].y * gridSize.z +
+			neighborOffset[i].z;
+
+		uint start = gridStartIdx[neighborIdx1d];
+		uint end = gridStartIdx[neighborIdx1d + 1]; //last element? -> one more element
+		for (uint n = start; n < end; ++n)
+		{
+			float3 relativePos = particles[flatIdx].position - particles[n].position;
+			particles[flatIdx].inv_density += particles[n].mass * KernelPoly6(relativePos);
+		}
+	}
+
+	if (particles[flatIdx].inv_density <= restDensity)
+	{
+		particles[flatIdx].pressure = 0;
+		particles[flatIdx].inv_density = 1 / restDensity;
+	}
+	else
+	{
+		particles[flatIdx].pressure = stiffness * (particles[flatIdx].inv_density - restDensity);
+		particles[flatIdx].inv_density = 1 / particles[flatIdx].inv_density;
+	}
+}
+
+[numthreads(8, 8, 8)]
+void UpdateForce(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	particles[flatIdx].forcePressure = float3(0, 0, 0);
+	particles[flatIdx].forceViscosity = float3(0, 0, 0);
+	particles[flatIdx].forceTension = float3(0, 0, 0);
+	particles[flatIdx].onSurface = 0;
+	float tension = 0;
+	float3 colorGrad = float3(0, 0, 0);
+
+	[unroll]
+	for (uint i = 0; i < 27; ++i)
+	{
+		if (!neighborSpace[flatIdx * 27 + i])
+			continue;
+
+		uint neighborIdx1d = particles[flatIdx].cellIdx1d +
+			neighborOffset[i].x * gridSize.y * gridSize.z +
+			neighborOffset[i].y * gridSize.z +
+			neighborOffset[i].z;
+
+		uint start = gridStartIdx[neighborIdx1d];
+		uint end = gridStartIdx[neighborIdx1d + 1]; //last element? -> one more element
+		for (uint n = start; n < end; ++n)
+		{
+			float3 relativePos = particles[flatIdx].position - particles[n].position;
+			particles[flatIdx].forcePressure += (-0.5) * particles[n].mass *
+				(particles[flatIdx].pressure + particles[n].pressure) *
+				particles[n].inv_density *
+				GradKernelSpiky(relativePos);
+
+			particles[flatIdx].forceViscosity += particles[n].mass *
+				(particles[n].velocity - particles[flatIdx].velocity) *
+				particles[n].inv_density * 
+				LaplacianKernelViscosity(relativePos);
+
+			colorGrad += particles[n].mass * particles[n].inv_density *
+				GradKernelPoly6(relativePos);
+
+			tension -= particles[n].mass * particles[n].inv_density * LaplacianKernelPoly6(relativePos);
+		}
+	}
+
+	particles[flatIdx].forceViscosity *= viscosity;
+
+	if (dot(colorGrad, colorGrad) > surfaceThreshold * surfaceThreshold)
+	{
+		particles[flatIdx].onSurface = 1;
+		particles[flatIdx].forceTension = tensionCoeff * tension * normalize(colorGrad);
+	}
+}
+
+[numthreads(8, 8, 8)]
+void AdvanceParticle(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	float3 acc = (particles[flatIdx].forcePressure +
+		particles[flatIdx].forceViscosity +
+		particles[flatIdx].forceTension) /
+		particles[flatIdx].mass + externalAcc;
+
+
+	particles[flatIdx].position += particles[flatIdx].velocity * timeStep;
+	particles[flatIdx].prevVelocity = particles[flatIdx].velocity;
+	particles[flatIdx].velocity += acc * timeStep;
+	particles[flatIdx].midVelocity = 0.5 * (particles[flatIdx].velocity + particles[flatIdx].prevVelocity);
+
+	//boundary collision
+	ApplyGridBoundaryCondition(particles[flatIdx]);
+
+}
+
+[numthreads(8, 8, 8)]
+void InitParticle(uint groupIdx : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+	uint flatIdx = groupIdx + groupId.x * 512;
+	if (flatIdx >= particleNum)
+		return;
+
+	float3 acc = (particles[flatIdx].forcePressure +
+		particles[flatIdx].forceViscosity +
+		particles[flatIdx].forceTension) /
+		particles[flatIdx].mass + externalAcc;
+
+	particles[flatIdx].velocity += 0.5 * acc * timeStep;
 }
